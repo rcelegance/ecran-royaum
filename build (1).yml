@@ -1,0 +1,627 @@
+name: Fabriquer l'appli Ecran Royaum
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Creer les fichiers de l'appli
+        run: |
+          cat > settings.gradle.kts <<'FIN_FICHIER'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "EcranRoyaum"
+          include(":app")
+          FIN_FICHIER
+          cat > build.gradle.kts <<'FIN_FICHIER'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          FIN_FICHIER
+          cat > gradle.properties <<'FIN_FICHIER'
+          org.gradle.jvmargs=-Xmx2048m
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          FIN_FICHIER
+          mkdir -p app
+          cat > app/build.gradle.kts <<'FIN_FICHIER'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.rcelegance.ecran"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.rcelegance.ecran"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              signingConfigs {
+                  create("royaum") {
+                      storeFile = file("royaum.keystore")
+                      storePassword = "royaum2026"
+                      keyAlias = "royaum"
+                      keyPassword = "royaum2026"
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                      signingConfig = signingConfigs.getByName("royaum")
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          FIN_FICHIER
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'FIN_FICHIER'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+              <uses-feature android:name="android.software.leanback" android:required="false" />
+              <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+              <application
+                  android:label="Écran Royaum"
+                  android:icon="@drawable/banner"
+                  android:banner="@drawable/banner"
+                  android:usesCleartextTraffic="false">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                          <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".EcranService"
+                      android:exported="false"
+                      android:foregroundServiceType="dataSync" />
+
+                  <receiver
+                      android:name=".BootReceiver"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED" />
+                      </intent-filter>
+                  </receiver>
+              </application>
+          </manifest>
+          FIN_FICHIER
+          mkdir -p app/src/main/res/drawable
+          cat > app/src/main/res/drawable/banner.xml <<'FIN_FICHIER'
+          <?xml version="1.0" encoding="utf-8"?>
+          <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+              <item>
+                  <shape android:shape="rectangle">
+                      <solid android:color="#14213D" />
+                      <size android:width="320dp" android:height="180dp" />
+                  </shape>
+              </item>
+              <item android:top="150dp">
+                  <shape android:shape="rectangle">
+                      <solid android:color="#B8892B" />
+                  </shape>
+              </item>
+          </layer-list>
+          FIN_FICHIER
+          mkdir -p app/src/main/java/com/rcelegance/ecran
+          cat > app/src/main/java/com/rcelegance/ecran/Phrases.kt <<'FIN_FICHIER'
+          package com.rcelegance.ecran
+
+          import org.json.JSONObject
+
+          /** Ce que la télé affiche et dit. Les vendeuses ne peuvent rien modifier ici. */
+          data class Annonce(
+              val titre: String,
+              val detail: String,
+              val montant: String,
+              val voix: String
+          )
+
+          object Phrases {
+
+              /** Canal partagé avec la page caisse (même nom des deux côtés). */
+              const val CANAL = "rcelegance-ecran-k7q3vx92pm"
+
+              private fun f(n: Long): String {
+                  val s = n.toString().reversed().chunked(3).joinToString(" ").reversed()
+                  return "$s F"
+              }
+
+              fun depuis(d: JSONObject): Annonce? {
+                  val k = d.optString("k")
+                  val nom = d.optString("nom").trim()
+                  val prix = d.optLong("prix", 0)
+                  val remise = d.optLong("remise", 0)
+                  val modele = if (nom.isNotEmpty()) "ce modèle, $nom," else "ce modèle"
+
+                  return when (k) {
+                      "prix" -> Annonce(
+                          titre = nom.ifEmpty { "Prix du modèle" },
+                          detail = "Prix fixe. Pour une remise, prenez une 2e paire.",
+                          montant = if (prix > 0) f(prix) else "",
+                          voix = "Cher client, $modele est à $prix francs. " +
+                              "C'est déjà notre meilleur prix, il est fixe. " +
+                              "Pour avoir une remise, prenez une deuxième paire. " +
+                              "Merci pour votre compréhension."
+                      )
+                      "fidele" -> if (remise > 0 && prix > 0) Annonce(
+                          titre = "Félicitations, client fidèle !",
+                          detail = (if (nom.isNotEmpty()) "$nom : " else "") + "remise de ${f(remise)}",
+                          montant = f(prix - remise),
+                          voix = "Félicitations, cher client fidèle ! Sur $modele vous avez une remise de $remise francs. " +
+                              "Vous payez seulement ${prix - remise} francs. Merci pour votre fidélité."
+                      ) else Annonce(
+                          titre = "Félicitations, client fidèle !",
+                          detail = "Une remise fidélité s'applique sur cette paire.",
+                          montant = "",
+                          voix = "Félicitations, cher client fidèle ! Vous bénéficiez d'une remise fidélité sur cette paire. " +
+                              "La caisse vous indique le montant. Merci pour votre fidélité."
+                      )
+                      "negocie" -> Annonce(
+                          titre = "Nos prix sont fixes",
+                          detail = "Remise dès 2 paires, ou avec le bon de votre reçu (valable 1 an).",
+                          montant = "",
+                          voix = "Très cher client, au Royaume des Chaussures, nos prix sont fixes : vous avez déjà le bon prix, " +
+                              "et nos vendeuses ne peuvent pas le modifier. Pour avoir une remise : prenez deux paires ou plus, " +
+                              "ou revenez avec le bon de réduction de votre reçu, valable un an. Merci pour votre compréhension."
+                      )
+                      "lot" -> Annonce(
+                          titre = nom.ifEmpty { "Offre spéciale" },
+                          detail = "Offre : ${d.optLong("lotQ", 2)} paires pour ${f(d.optLong("lotP", 0))}",
+                          montant = if (prix > 0) f(prix) + " la paire" else "",
+                          voix = "Cher client, $modele est en offre spéciale : ${d.optLong("lotQ", 2)} paires pour ${d.optLong("lotP", 0)} francs, " +
+                              "pointures au choix. Une seule paire est à $prix francs. Profitez-en !"
+                      )
+                      "petitprix" -> Annonce(
+                          titre = nom.ifEmpty { "Petit prix" },
+                          detail = "Déjà au plus bas : aucune remise possible.",
+                          montant = if (prix > 0) f(prix) else "",
+                          voix = "Très cher client, ce modèle est déjà à petit prix. " +
+                              "Aucune remise n'est possible dessus. Merci pour votre compréhension."
+                      )
+                      "fin" -> Annonce(
+                          titre = "Merci pour votre achat !",
+                          detail = "Donnez votre numéro WhatsApp pour recevoir votre reçu.",
+                          montant = "",
+                          voix = "Merci pour votre achat, très cher client ! N'oubliez pas de donner votre numéro WhatsApp à la caisse : " +
+                              "nous allons vous envoyer votre reçu. Ce reçu est très important, gardez-le bien. " +
+                              "C'est votre carte de fidélité : à votre prochain achat, il vous donne droit à une remise, " +
+                              "même sur une seule paire. Merci, et à très bientôt !"
+                      )
+                      "recu" -> Annonce(
+                          titre = "Votre reçu, votre fidélité",
+                          detail = "Valable 1 an. Remise dès la prochaine paire. Hors promos et petits prix.",
+                          montant = "",
+                          voix = "Très cher client, voici comment fonctionne votre reçu. Il est valable un an. " +
+                              "Avec lui, vous avez une remise dès votre prochaine paire. " +
+                              "Plus vous êtes un client ancien, plus votre remise est importante : " +
+                              "à partir de quatre paires dans l'année, vous devenez client privilégié. " +
+                              "Vous pouvez aussi donner votre reçu à un ami, mais il aura une remise plus limitée que la vôtre. " +
+                              "Attention : les chaussures en promotion ou à petit prix sont déjà au plus bas, " +
+                              "donc aucune remise ne s'applique dessus. Merci pour votre compréhension."
+                      )
+                      "echange" -> Annonce(
+                          titre = "Les échanges",
+                          detail = "Sous 1 semaine, chaussure intacte, avec votre reçu.",
+                          montant = "",
+                          voix = "Très cher client, vous pouvez échanger votre chaussure dans un délai d'une semaine après l'achat. " +
+                              "Elle doit être intacte, non portée dehors, et vous devez présenter votre reçu. " +
+                              "Merci pour votre compréhension."
+                      )
+                      "accueil" -> Annonce(
+                          titre = "Bienvenue au Royaum' des Chaussures !",
+                          detail = "Faites-vous plaisir, nos vendeuses sont à votre écoute.",
+                          montant = "",
+                          voix = "Bienvenue au Royaume des Chaussures ! Faites-vous plaisir, nos vendeuses sont à votre écoute."
+                      )
+                      else -> null
+                  }
+              }
+          }
+          FIN_FICHIER
+          mkdir -p app/src/main/java/com/rcelegance/ecran
+          cat > app/src/main/java/com/rcelegance/ecran/EcranService.kt <<'FIN_FICHIER'
+          package com.rcelegance.ecran
+
+          import android.app.Notification
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.Service
+          import android.content.Intent
+          import android.content.pm.ServiceInfo
+          import android.graphics.Color
+          import android.graphics.PixelFormat
+          import android.graphics.Typeface
+          import android.media.AudioAttributes
+          import android.media.AudioFocusRequest
+          import android.media.AudioManager
+          import android.os.Build
+          import android.os.Handler
+          import android.os.IBinder
+          import android.os.Looper
+          import android.provider.Settings
+          import android.speech.tts.TextToSpeech
+          import android.speech.tts.UtteranceProgressListener
+          import android.view.Gravity
+          import android.view.View
+          import android.view.WindowManager
+          import android.widget.LinearLayout
+          import android.widget.TextView
+          import org.json.JSONObject
+          import java.io.BufferedReader
+          import java.io.InputStreamReader
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import java.util.Locale
+
+          class EcranService : Service() {
+
+              companion object {
+                  @Volatile var connecte = false
+                  @Volatile var voixPrete = false
+                  const val EXTRA_TEST = "test"
+              }
+
+              private val main = Handler(Looper.getMainLooper())
+              private var tts: TextToSpeech? = null
+              private var bandeau: View? = null
+              private var ecoute: Thread? = null
+              @Volatile private var actif = true
+              private lateinit var audio: AudioManager
+              private var focus: AudioFocusRequest? = null
+              private val cacher = Runnable { retirerBandeau() }
+
+              private val attrsVoix = AudioAttributes.Builder()
+                  .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                  .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                  .build()
+
+              override fun onBind(intent: Intent?): IBinder? = null
+
+              override fun onCreate() {
+                  super.onCreate()
+                  audio = getSystemService(AUDIO_SERVICE) as AudioManager
+                  demarrerPremierPlan()
+                  tts = TextToSpeech(this) { st ->
+                      if (st == TextToSpeech.SUCCESS) {
+                          tts?.language = Locale.FRANCE
+                          tts?.setAudioAttributes(attrsVoix)
+                          tts?.setSpeechRate(0.95f)
+                          tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                              override fun onStart(id: String?) {}
+                              override fun onDone(id: String?) { finVoix() }
+                              @Deprecated("API") override fun onError(id: String?) { finVoix() }
+                          })
+                          voixPrete = true
+                      }
+                  }
+                  ecoute = Thread { boucleEcoute() }.also { it.isDaemon = true; it.start() }
+              }
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  if (intent?.getBooleanExtra(EXTRA_TEST, false) == true) {
+                      main.postDelayed({
+                          traiter(JSONObject("{\"k\":\"prix\",\"nom\":\"Modèle test\",\"prix\":25000}"))
+                      }, 800)
+                  }
+                  return START_STICKY
+              }
+
+              override fun onDestroy() {
+                  actif = false
+                  retirerBandeau()
+                  tts?.shutdown()
+                  super.onDestroy()
+              }
+
+              private fun demarrerPremierPlan() {
+                  val nm = getSystemService(NotificationManager::class.java)
+                  nm.createNotificationChannel(
+                      NotificationChannel("ecran", "Écran client", NotificationManager.IMPORTANCE_LOW)
+                  )
+                  val n = Notification.Builder(this, "ecran")
+                      .setContentTitle("Écran Royaum' actif")
+                      .setContentText("En attente des annonces de la caisse")
+                      .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                      .build()
+                  if (Build.VERSION.SDK_INT >= 29) {
+                      startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                  } else {
+                      startForeground(1, n)
+                  }
+              }
+
+              /** Écoute en continu le canal ; se reconnecte seule en cas de coupure. */
+              private fun boucleEcoute() {
+                  while (actif) {
+                      var c: HttpURLConnection? = null
+                      try {
+                          c = URL("https://ntfy.sh/${Phrases.CANAL}/json").openConnection() as HttpURLConnection
+                          c.connectTimeout = 15000
+                          c.readTimeout = 120000
+                          val r = BufferedReader(InputStreamReader(c.inputStream, Charsets.UTF_8))
+                          connecte = true
+                          while (actif) {
+                              val ligne = r.readLine() ?: break
+                              if (ligne.isBlank()) continue
+                              val o = JSONObject(ligne)
+                              if (o.optString("event") != "message") continue
+                              val d = try { JSONObject(o.optString("message")) } catch (e: Exception) { null } ?: continue
+                              main.post { traiter(d) }
+                          }
+                      } catch (e: Exception) {
+                          // coupure réseau : on réessaie
+                      } finally {
+                          connecte = false
+                          c?.disconnect()
+                      }
+                      try { Thread.sleep(5000) } catch (e: InterruptedException) { return }
+                  }
+              }
+
+              private fun traiter(d: JSONObject) {
+                  if (d.optString("k") == "zero") { retirerBandeau(); tts?.stop(); finVoix(); return }
+                  val a = Phrases.depuis(d) ?: return
+                  afficher(a)
+                  parler(a.voix)
+              }
+
+              private fun parler(texte: String) {
+                  val t = tts ?: return
+                  if (!voixPrete) return
+                  val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                      .setAudioAttributes(attrsVoix)
+                      .setOnAudioFocusChangeListener { }
+                      .build()
+                  focus = req
+                  audio.requestAudioFocus(req)
+                  t.stop()
+                  t.speak(texte, TextToSpeech.QUEUE_FLUSH, null, "annonce")
+              }
+
+              private fun finVoix() {
+                  focus?.let { audio.abandonAudioFocusRequest(it) }
+                  focus = null
+                  main.removeCallbacks(cacher)
+                  main.postDelayed(cacher, 8000)
+              }
+
+              // ---------- Bandeau par-dessus la musique ----------
+
+              private fun afficher(a: Annonce) {
+                  retirerBandeau()
+                  main.removeCallbacks(cacher)
+                  main.postDelayed(cacher, 60000) // sécurité si la voix ne termine pas
+                  if (!Settings.canDrawOverlays(this)) return
+
+                  val dens = resources.displayMetrics.density
+                  fun dp(v: Int) = (v * dens).toInt()
+
+                  val boite = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setBackgroundColor(Color.WHITE)
+                      gravity = Gravity.CENTER_HORIZONTAL
+                      setPadding(dp(32), 0, dp(32), dp(20))
+                  }
+                  boite.addView(View(this).apply { setBackgroundColor(Color.parseColor("#B8892B")) },
+                      LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)))
+                  fun ligne(txt: String, taille: Float, couleur: String, gras: Boolean, haut: Int) {
+                      if (txt.isEmpty()) return
+                      boite.addView(TextView(this).apply {
+                          text = txt
+                          textSize = taille
+                          setTextColor(Color.parseColor(couleur))
+                          gravity = Gravity.CENTER
+                          if (gras) typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
+                          setPadding(0, dp(haut), 0, 0)
+                      })
+                  }
+                  ligne("Royaum' des Chaussures", 14f, "#B8892B", true, 10)
+                  ligne(a.titre, 30f, "#14213D", true, 6)
+                  ligne(a.montant, 44f, "#B8892B", true, 4)
+                  ligne(a.detail, 20f, "#14213D", false, 6)
+
+                  val lp = WindowManager.LayoutParams(
+                      WindowManager.LayoutParams.MATCH_PARENT,
+                      WindowManager.LayoutParams.WRAP_CONTENT,
+                      WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                      PixelFormat.TRANSLUCENT
+                  ).apply { gravity = Gravity.BOTTOM }
+
+                  try {
+                      (getSystemService(WINDOW_SERVICE) as WindowManager).addView(boite, lp)
+                      bandeau = boite
+                  } catch (e: Exception) { bandeau = null }
+              }
+
+              private fun retirerBandeau() {
+                  val v = bandeau ?: return
+                  try { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(v) } catch (e: Exception) {}
+                  bandeau = null
+              }
+          }
+          FIN_FICHIER
+          mkdir -p app/src/main/java/com/rcelegance/ecran
+          cat > app/src/main/java/com/rcelegance/ecran/BootReceiver.kt <<'FIN_FICHIER'
+          package com.rcelegance.ecran
+
+          import android.content.BroadcastReceiver
+          import android.content.Context
+          import android.content.Intent
+
+          class BootReceiver : BroadcastReceiver() {
+              override fun onReceive(context: Context, intent: Intent) {
+                  if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
+                      context.startForegroundService(Intent(context, EcranService::class.java))
+                  }
+              }
+          }
+          FIN_FICHIER
+          mkdir -p app/src/main/java/com/rcelegance/ecran
+          cat > app/src/main/java/com/rcelegance/ecran/MainActivity.kt <<'FIN_FICHIER'
+          package com.rcelegance.ecran
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.provider.Settings
+          import android.view.Gravity
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.TextView
+
+          class MainActivity : Activity() {
+
+              private lateinit var etat: TextView
+              private val h = Handler(Looper.getMainLooper())
+              private val maj = object : Runnable {
+                  override fun run() { majEtat(); h.postDelayed(this, 2000) }
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  if (Build.VERSION.SDK_INT >= 33) {
+                      requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+                  }
+                  startForegroundService(Intent(this, EcranService::class.java))
+
+                  val d = resources.displayMetrics.density
+                  fun dp(v: Int) = (v * d).toInt()
+
+                  val page = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setBackgroundColor(Color.WHITE)
+                      setPadding(dp(48), dp(32), dp(48), dp(32))
+                  }
+                  page.addView(TextView(this).apply {
+                      text = "Écran Royaum'"
+                      textSize = 34f
+                      setTextColor(Color.parseColor("#14213D"))
+                      typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
+                      gravity = Gravity.CENTER
+                  })
+                  etat = TextView(this).apply {
+                      textSize = 20f
+                      setTextColor(Color.parseColor("#14213D"))
+                      gravity = Gravity.CENTER
+                      setPadding(0, dp(16), 0, dp(16))
+                  }
+                  page.addView(etat)
+
+                  fun bouton(txt: String, action: () -> Unit) = Button(this).apply {
+                      text = txt
+                      textSize = 18f
+                      isAllCaps = false
+                      setOnClickListener { action() }
+                  }.also {
+                      page.addView(it, LinearLayout.LayoutParams(dp(520), LinearLayout.LayoutParams.WRAP_CONTENT)
+                          .apply { topMargin = dp(10) })
+                  }
+
+                  bouton("1. Autoriser l'affichage par-dessus la musique") { ouvrirAutorisation() }
+                  bouton("2. Tester la voix et le bandeau") {
+                      startForegroundService(Intent(this, EcranService::class.java).putExtra(EcranService.EXTRA_TEST, true))
+                  }
+                  bouton("3. Retour à l'accueil de la télé") {
+                      startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
+                  }
+                  setContentView(page)
+                  page.getChildAt(2)?.requestFocus()
+              }
+
+              override fun onResume() { super.onResume(); h.post(maj) }
+              override fun onPause() { super.onPause(); h.removeCallbacks(maj) }
+
+              private fun majEtat() {
+                  val l = mutableListOf<String>()
+                  l += if (EcranService.connecte) "✔ Reliée à la caisse" else "… Connexion à la caisse en cours"
+                  l += if (EcranService.voixPrete) "✔ Voix prête" else "… Préparation de la voix"
+                  l += if (Settings.canDrawOverlays(this)) "✔ Bandeau autorisé"
+                       else "✖ Bandeau non autorisé (bouton 1)"
+                  etat.text = l.joinToString("\n")
+              }
+
+              private fun ouvrirAutorisation() {
+                  val essais = listOf(
+                      Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")),
+                      Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION),
+                      Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+                  )
+                  for (i in essais) {
+                      try { startActivity(i); return } catch (e: Exception) {}
+                  }
+                  etat.text = "Ouvrez Paramètres → Applications → Accès spécial → Afficher par-dessus d'autres applis"
+              }
+          }
+          FIN_FICHIER
+          echo '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' | base64 -d > app/royaum.keystore
+          ls -R app | head -40
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Fabriquer l'APK
+        run: gradle assembleRelease --no-daemon
+
+      - name: Renommer
+        run: cp app/build/outputs/apk/release/app-release.apk ecran.apk
+
+      - name: Publier la version
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Ecran Royaum v${{ github.run_number }}
+          files: ecran.apk
+          make_latest: true
